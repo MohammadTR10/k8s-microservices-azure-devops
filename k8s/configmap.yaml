@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: task-app
+data:
+  POSTGRES_HOST: "postgres-service"
+  POSTGRES_USER: "postgres"
+  POSTGRES_DATABASE: "postgres"
+  POSTGRES_DB: "postgres"
+  REDIS_HOST: "redis-service"
+  REQUEST_ORIGIN: "http://localhost"

@@ -1,0 +1,58 @@
+trigger:
+  branches:
+    include:
+      - master
+  paths:
+    include:
+      - backend/*
+
+variables:
+  imageName: 'task'
+  registry: 'mhammadtr.azurecr.io'
+
+stages:
+- stage: BackendCI_CD
+  displayName: "Backend CI/CD"
+  jobs:
+
+    - job: BuildPushBackend
+      displayName: "Build & Push Backend"
+      pool:
+        name: 'Default'
+      steps:
+
+        - task: Docker@2
+          inputs:
+            command: login
+            containerRegistry: 'myACRConnection'
+
+        - script: |
+            docker buildx create --use
+            docker buildx inspect --bootstrap
+          displayName: "Setup Docker Buildx"
+
+        - script: |
+            echo "Building & Pushing Backend with Buildx..."
+
+            docker buildx build \
+              --cache-from type=registry,ref=$(registry)/$(imageName)-backend:cache \
+              --cache-to type=registry,ref=$(registry)/$(imageName)-backend:cache,mode=max \
+              -t $(registry)/$(imageName)-backend:$(Build.BuildId) \
+              -t $(registry)/$(imageName)-backend:latest \
+              --push \
+              ./backend
+          displayName: "Build & Push Backend (Buildx)"
+
+    - job: UpdateBackendDeployment
+      displayName: "Update Backend Deployment"
+      dependsOn: BuildPushBackend
+      pool:
+        name: 'cluster agent'
+      steps:
+
+        - script: |
+            echo "Updating Backend Deployment Image..."
+
+            kubectl set image deployment/backend-deployment \
+              backend=$(registry)/$(imageName)-backend:$(Build.BuildId)
+          displayName: 'Update Backend Deployment'

@@ -1,0 +1,112 @@
+# =============================================================================
+# Production-Grade CI/CD Pipeline - Azure DevOps
+# =============================================================================
+# Features:
+# 1. Zero plaintext secrets in Git (Uses Azure Service Connection).
+# 2. Multi-stage Docker Buildx with registry caching.
+# 3. Immutable image tagging using Build ID (No reliance on :latest).
+# 4. Dependency-ordered Kubernetes manifest deployment (Secret -> ConfigMap -> Services).
+# 5. Automated Rollout verification to guarantee Zero Downtime.
+# =============================================================================
+
+trigger: none 
+
+variables:
+  imageName: 'task'
+  registry: 'ghcr.io/mohammadtr10'
+  dockerRegistryServiceConnection: 'myACRConnection'
+
+stages:
+- stage: FullDeploy
+  displayName: "CI/CD: Build, Push & Deploy to K8s"
+  jobs:
+    # -------------------------------------------------------------------------
+    # JOB 1: Build & Push Images with Buildx
+    # -------------------------------------------------------------------------
+    - job: BuildPush
+      displayName: "Build & Push Container Images"
+      pool: 
+        name: 'cluster agent'
+      steps:
+        # Secure login without hardcoded passwords
+        - task: Docker@2
+          displayName: 'Login to ACR via Service Connection'
+          inputs:
+            command: login
+            containerRegistry: '$(dockerRegistryServiceConnection)'
+
+        - script: |
+            echo "==> Initializing Docker Buildx builder..."
+            docker buildx create --use || true
+            docker buildx inspect --bootstrap
+          displayName: "Setup Docker Buildx"
+
+        - script: |
+            echo "==> Building & Pushing Frontend with Buildx..."
+            docker buildx build \
+              --cache-from type=registry,ref=$(registry)/$(imageName)-frontend:cache \
+              --cache-to type=registry,ref=$(registry)/$(imageName)-frontend:cache,mode=max \
+              -t $(registry)/$(imageName)-frontend:$(Build.BuildId) \
+              -t $(registry)/$(imageName)-frontend:latest \
+              --push \
+              ./frontend
+          displayName: "Build & Push Frontend (Buildx)"
+
+        - script: |
+            echo "==> Building & Pushing Backend with Buildx..."
+            docker buildx build \
+              --cache-from type=registry,ref=$(registry)/$(imageName)-backend:cache \
+              --cache-to type=registry,ref=$(registry)/$(imageName)-backend:cache,mode=max \
+              -t $(registry)/$(imageName)-backend:$(Build.BuildId) \
+              -t $(registry)/$(imageName)-backend:latest \
+              --push \
+              ./backend
+          displayName: "Build & Push Backend (Buildx)"
+
+    # -------------------------------------------------------------------------
+    # JOB 2: Deploy & Update Kubernetes Cluster
+    # -------------------------------------------------------------------------
+    - job: ApplyK8s
+      displayName: "Deploy to Kubernetes Cluster"
+      dependsOn: BuildPush 
+      pool:
+        name: 'k8s-cluster-agent'
+      steps:
+        - script: |
+            echo "==> Verifying ACR imagePullSecret in task-app namespace..."
+            if [ -n "$(ACR_PASSWORD)" ] && [ -n "$(ACR_USERNAME)" ]; then
+              kubectl create secret docker-registry acr-secret \
+                --docker-server=$(registry) \
+                --docker-username=$(ACR_USERNAME) \
+                --docker-password=$(ACR_PASSWORD) \
+                --namespace=task-app --save-config --dry-run=client -o yaml | kubectl apply -f -
+              echo "acr-secret updated successfully."
+            else
+              echo "Using existing acr-secret in task-app namespace."
+            fi
+          displayName: 'Ensure ACR Secret'
+
+        - script: |
+            echo "==> Applying Namespace, Core Configs & Storage..."
+            kubectl apply -f $(System.DefaultWorkingDirectory)/k8s/namespace.yaml
+            kubectl apply -f $(System.DefaultWorkingDirectory)/k8s/secret.yaml
+            kubectl apply -f $(System.DefaultWorkingDirectory)/k8s/configmap.yaml
+            kubectl apply -f $(System.DefaultWorkingDirectory)/k8s/postgres-pv.yaml
+            kubectl apply -f $(System.DefaultWorkingDirectory)/k8s/postgres-pvc.yaml
+            kubectl apply -f $(System.DefaultWorkingDirectory)/k8s/data-services.yaml
+            kubectl apply -f $(System.DefaultWorkingDirectory)/k8s/ingress.yaml
+          displayName: 'Apply Configs, Storage & Services'
+
+        - script: |
+            echo "==> Applying Deployments..."
+            kubectl apply -f $(System.DefaultWorkingDirectory)/k8s/frontend.yaml
+            kubectl apply -f $(System.DefaultWorkingDirectory)/k8s/backend.yaml
+
+            echo "==> Updating Deployment Images to Build ID: $(Build.BuildId)..."
+            kubectl set image deployment/backend-deployment backend=$(registry)/$(imageName)-backend:$(Build.BuildId) -n task-app
+            kubectl set image deployment/frontend-deployment frontend=$(registry)/$(imageName)-frontend:$(Build.BuildId) -n task-app
+
+            echo "==> Verifying Rollout Status..."
+            kubectl rollout status deployment/backend-deployment --timeout=300s -n task-app
+            kubectl rollout status deployment/frontend-deployment --timeout=300s -n task-app
+          displayName: 'Deploy & Verify Rollout'

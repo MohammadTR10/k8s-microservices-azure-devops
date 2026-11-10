@@ -1,0 +1,50 @@
+trigger:
+  branches:
+    include:
+      - master
+  paths:
+    include:
+      - frontend/*
+
+variables:
+  imageName: 'task'
+  registry: 'mhammadtr.azurecr.io'
+
+stages:
+- stage: FrontendCI_CD
+  displayName: "Frontend CI/CD"
+  jobs:
+    - job: BuildPushFrontend
+      displayName: "Build & Push Frontend"
+      pool:
+        name: 'Default'
+      steps:
+        - task: Docker@2
+          inputs:
+            command: login
+            containerRegistry: 'myACRConnection'
+        - script: |
+            docker buildx create --use
+            docker buildx inspect --bootstrap
+          displayName: "Setup Docker Buildx"
+        - script: |
+            docker build \
+            -t $(registry)/$(imageName)-frontend:$(Build.BuildId) \
+            -t $(registry)/$(imageName)-frontend:latest \
+            ./frontend
+
+            docker push $(registry)/$(imageName)-frontend:$(Build.BuildId)
+            docker push $(registry)/$(imageName)-frontend:latest
+          displayName: "Build & Push Frontend"
+
+    - job: UpdateFrontendDeployment
+      displayName: "Update Frontend Deployment"
+      dependsOn: BuildPushFrontend 
+      pool:
+        name: 'cluster agent'
+      steps:
+        - script: |
+            echo "Updating Frontend Deployment Image..."
+            kubectl set image deployment/frontend-deployment frontend=$(registry)/$(imageName)-frontend:$(Build.BuildId)
+          displayName: 'Update Frontend Deployment'
+
