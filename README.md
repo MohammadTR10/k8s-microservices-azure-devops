@@ -9,7 +9,7 @@ An end-to-end DevOps project taking a multi-service web application from a local
 The goal of this project was to build complete, real-world DevOps infrastructure around an existing fullstack microservices application. 
 
 ### What was pre-existing:
-* **The application code**: The React frontend and Go (Gin) backend were sourced from an open-source educational project ([DevOps with Docker](https://courses.helsinki.fi/en/bses20003/)).
+* **The application code**: The React frontend and Go (Gin) backend were sourced from an open-source educational project.
 * **Basic Dockerfiles**: The repository initially included starter Dockerfiles for the frontend and backend.
 
 ### What I built from scratch:
